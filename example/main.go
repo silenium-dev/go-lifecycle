@@ -63,16 +63,22 @@ func (a *mainApp) Main(ctx context.Context, loggingCtx context.Context) error {
 			}
 		}
 	}()
-	for {
+	for j := 0; j < 10; j++ {
 		select {
 		case <-time.After(time.Second):
 			logCh <- "tick"
 		case <-ctx.Done():
 			for i := 0; i < 4; i++ {
 				logCh <- strconv.Itoa(i)
-				<-time.After(time.Second)
+				select {
+				case <-time.After(time.Second):
+					break
+				case <-loggingCtx.Done():
+					return nil
+				}
 			}
 			return nil
 		}
 	}
+	return nil
 }

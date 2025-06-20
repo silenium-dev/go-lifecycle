@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 )
 
 type Application struct {
-	parentCtx  context.Context
-	mainCtx    *CancellableContext
-	loggingCtx *CancellableContext
-	signalChan chan os.Signal
-	mainDone   chan struct{}
+	parentCtx   context.Context
+	mainCtx     *CancellableContext
+	loggingCtx  *CancellableContext
+	signalChan  chan os.Signal
+	mainDone    chan struct{}
+	cleanupRun  bool
+	cleanupCond *sync.Cond
 
 	impl App
 }
@@ -34,6 +37,9 @@ func NewApplication(impl App) *Application {
 		signalChan: make(chan os.Signal, 1),
 		mainDone:   make(chan struct{}, 1),
 		impl:       impl,
+
+		cleanupRun:  false,
+		cleanupCond: sync.NewCond(&sync.Mutex{}),
 	}
 	signal.Notify(
 		app.signalChan,
@@ -70,6 +76,7 @@ func (app *Application) Run() error {
 		return fmt.Errorf("error running application main: %w", err)
 	}
 	app.mainDone <- struct{}{}
+	app.synchronizedCleanup()
 	return nil
 }
 
@@ -77,11 +84,7 @@ func (app *Application) handleSignal() {
 	<-app.signalChan
 	go app.handleImmediateExit()
 	app.mainCtx.Cancel()
-	if cleanable, ok := app.impl.(CleanableApp); ok {
-		cleanupCtx := DeriveContext(app.parentCtx)
-		defer cleanupCtx.Cancel()
-		cleanable.Cleanup(cleanupCtx, app.loggingCtx)
-	}
+	app.synchronizedCleanup()
 	<-app.mainDone
 	app.loggingCtx.Cancel()
 }
@@ -92,4 +95,20 @@ func (app *Application) handleImmediateExit() {
 		immediate.ImmediateExit()
 	}
 	os.Exit(1)
+}
+
+func (app *Application) synchronizedCleanup() {
+	app.cleanupCond.L.Lock()
+	defer app.cleanupCond.L.Unlock()
+	if app.cleanupRun {
+		return
+	}
+	app.cleanupRun = true
+
+	if cleanable, ok := app.impl.(CleanableApp); ok {
+		cleanupCtx := DeriveContext(app.parentCtx)
+		defer cleanupCtx.Cancel()
+		cleanable.Cleanup(cleanupCtx, app.loggingCtx)
+	}
+	app.cleanupCond.Broadcast()
 }
