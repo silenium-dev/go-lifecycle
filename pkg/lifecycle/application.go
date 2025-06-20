@@ -72,11 +72,12 @@ func (app *Application) Run() error {
 	if app.loggingCtx.Err() != nil {
 		return fmt.Errorf("logging context canceled: %w", app.loggingCtx.Err())
 	}
-	if err := app.impl.Main(app.mainCtx, app.loggingCtx); err != nil {
-		return fmt.Errorf("error running application main: %w", err)
-	}
+	err := app.impl.Main(app.mainCtx, app.loggingCtx)
 	app.mainDone <- struct{}{}
 	app.synchronizedCleanup()
+	if err != nil {
+		return fmt.Errorf("error running application main: %w", err)
+	}
 	return nil
 }
 
