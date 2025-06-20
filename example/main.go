@@ -14,14 +14,21 @@ import (
 var logCh = make(chan string)
 
 func main() {
-	app := lifecycle.NewApplication(appMain, appCleanup, nil)
+	app := lifecycle.NewApplication(&mainApp{})
 	err := app.Run()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func appCleanup(ctx context.Context, loggingCtx context.Context) {
+type mainApp struct {
+}
+
+func (a *mainApp) ImmediateExit() {
+	log.Println("immediate exit")
+}
+
+func (a *mainApp) Cleanup(ctx context.Context, loggingCtx context.Context) {
 	if loggingCtx.Err() != nil {
 		log.Println("logging context canceled")
 	} else {
@@ -44,7 +51,7 @@ func appCleanup(ctx context.Context, loggingCtx context.Context) {
 	logCh <- fmt.Sprintf("random number from randomnumberapi.com: %d", nums[0])
 }
 
-func appMain(ctx context.Context, loggingCtx context.Context) error {
+func (a *mainApp) Main(ctx context.Context, loggingCtx context.Context) error {
 	go func() {
 		for {
 			select {

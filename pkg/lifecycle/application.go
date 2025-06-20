@@ -15,37 +15,25 @@ type Application struct {
 	signalChan chan os.Signal
 	mainDone   chan struct{}
 
-	main          func(ctx context.Context, loggingCtx context.Context) error
-	cleanup       func(ctx context.Context, loggingCtx context.Context)
-	immediateExit func()
+	impl App
 }
 
 /*
-NewApplication creates a new Application with specified main, cleanup, and exit handlers.
-
-main is the primary application logic function to be executed.
-cleanup (optional) is a function to handle cleanup tasks when the application stops.
-immediateExit (optional) is invoked on receiving a second termination signal during shutdown.
+NewApplication creates a new Application with specified implementation
 
 There are two contexts available:
   - ctx: main context, all application actions should use this, canceled before cleanup
   - loggingCtx: lives slightly longer than the main context, canceled after cleanup,
     dedicated for logging background routines that need to run during cleanup
 */
-func NewApplication(
-	main func(ctx context.Context, loggingCtx context.Context) error,
-	cleanup func(ctx context.Context, loggingCtx context.Context),
-	immediateExit func(),
-) *Application {
+func NewApplication(impl App) *Application {
 	app := &Application{
-		parentCtx:     context.Background(),
-		mainCtx:       DeriveContext(context.Background()),
-		loggingCtx:    DeriveContext(context.Background()),
-		signalChan:    make(chan os.Signal, 1),
-		mainDone:      make(chan struct{}, 1),
-		main:          main,
-		cleanup:       cleanup,
-		immediateExit: immediateExit,
+		parentCtx:  context.Background(),
+		mainCtx:    DeriveContext(context.Background()),
+		loggingCtx: DeriveContext(context.Background()),
+		signalChan: make(chan os.Signal, 1),
+		mainDone:   make(chan struct{}, 1),
+		impl:       impl,
 	}
 	signal.Notify(
 		app.signalChan,
@@ -78,10 +66,7 @@ func (app *Application) Run() error {
 	if app.loggingCtx.Err() != nil {
 		return fmt.Errorf("logging context canceled: %w", app.loggingCtx.Err())
 	}
-	if app.main == nil {
-		return fmt.Errorf("no main function provided")
-	}
-	if err := app.main(app.mainCtx, app.loggingCtx); err != nil {
+	if err := app.impl.Main(app.mainCtx, app.loggingCtx); err != nil {
 		return fmt.Errorf("error running application main: %w", err)
 	}
 	app.mainDone <- struct{}{}
@@ -92,10 +77,10 @@ func (app *Application) handleSignal() {
 	<-app.signalChan
 	go app.handleImmediateExit()
 	app.mainCtx.Cancel()
-	if app.cleanup != nil {
+	if cleanable, ok := app.impl.(CleanableApp); ok {
 		cleanupCtx := DeriveContext(app.parentCtx)
 		defer cleanupCtx.Cancel()
-		app.cleanup(cleanupCtx, app.loggingCtx)
+		cleanable.Cleanup(cleanupCtx, app.loggingCtx)
 	}
 	<-app.mainDone
 	app.loggingCtx.Cancel()
@@ -103,8 +88,8 @@ func (app *Application) handleSignal() {
 
 func (app *Application) handleImmediateExit() {
 	<-app.signalChan
-	if app.immediateExit != nil {
-		app.immediateExit()
+	if immediate, ok := app.impl.(ImmediateExitApp); ok {
+		immediate.ImmediateExit()
 	}
 	os.Exit(1)
 }
